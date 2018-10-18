@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
+import sys
 import os
+import re
 import time
 import gzip
 import shutil
@@ -14,9 +16,8 @@ from bs4 import BeautifulSoup
 from selenium import webdriver
 from selenium.webdriver.firefox.options import Options
 
-
 options = Options()
-# options.add_argument('--headless')
+options.add_argument('--headless')
 
 FORMAT = " %(module)s %(filename)s %(lineno)d %(message)s"
 # logging.basicConfig(filename='scraper.log', level=logging.INFO, format=FORMAT)
@@ -30,8 +31,8 @@ HEADERS = {
     'Accept-Language': 'en-US,en;q=0.8',
     'Connection': 'keep-alive'}
 
-IMAGES = ['.JPG', '.JPEG' '.TIFF', '.GIF', '.BMP', '.PNG']
-VIDEOS = ['.MP4', '.WEBM', '.MOV', '.3GP', '.FLV', '.GIF', '.AVI', '.SWF', '.ASF', '.MPEG', '.MPG', '.WMV', 'TS', 'M3U8']
+IMAGES = ('.JPG', '.JPEG' '.TIFF', '.GIF', '.BMP', '.PNG')
+VIDEOS = ('.MP4', '.WEBM', '.MOV', '.3GP', '.FLV', '.GIF', '.AVI', '.SWF', '.ASF', '.MPEG', '.MPG', '.WMV', '.TS', '.M3U8', '.WEBM')
 
 
 def timit(func):
@@ -56,7 +57,7 @@ def class_timit(cls):
 @class_timit
 class Downloader(object):
     def __init__(self):
-        self._current_download_dir = "home/desktop/"
+        self._current_download_dir = "home/desktop/" if sys.platform not in ('win32') else "C:/temp/Downloads/"
         if not os.path.exists(self._current_download_dir):
             os.makedirs(self._current_download_dir)
 
@@ -124,6 +125,7 @@ class Downloader(object):
 class URL(Downloader):
     def __init__(self, url):
         super(URL, self).__init__()
+        url = urllib2.unquote(url)
         self.default_url = url
         self.parsed_url = urlparse.urlparse(url.__str__())
         parsed_info = '{uri.scheme}://{uri.netloc}/'.format(uri=self.parsed_url)
@@ -158,7 +160,13 @@ class URL(Downloader):
             logging.error(error)
             return None
 
-        extension = "." + url_request.headers.get("Content-Type", "part").split("/")[-1]
+        _extension = url_request.headers.get("Content-Type", "part")
+        search = re.search('[a-zA-Z0-9].*;', _extension)
+        if not search:
+            logging.info('Error finding extension for file {file}'.format(file=self.url))
+            logging.error('Error finding extension for file {file}'.format(file=self.url))
+            return None
+        extension = '.'+search.group().split(';')[0].split('/')[-1]
         base_name = os.path.basename(self.url).split(extension)[0] + extension
 
         name = url_request.headers.get("Etag", base_name)
@@ -226,7 +234,8 @@ class Scraper(URL):
         super(Scraper, self).__init__(link)
         self.ajax = ajax
         if self.ajax:
-            self.app = webdriver.Firefox(options=options)
+            # self.app = webdriver.Firefox(options=options)
+            self.app = webdriver.PhantomJS()
             self.app.get(self.url)
         self.image_tags = ['img', 'a', 'iframe']
         self.video_tags = ['video', 'videopv', 'a', 'iframe']
@@ -279,7 +288,6 @@ class Scraper(URL):
 
     def get_page_source(self, use_search_string=None):
 
-        souped_data = []
         if self.ajax:
             if not use_search_string:
                 page_data = self._scroll_page()
@@ -293,8 +301,8 @@ class Scraper(URL):
             soup = self.create_soup(data)
             if not soup:
                 continue
-            souped_data.append(soup)
-        return souped_data
+            yield(soup)
+        
 
     @staticmethod
     def create_soup(page_source):
