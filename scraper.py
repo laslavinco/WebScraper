@@ -125,6 +125,8 @@ class Downloader(object):
 class URL(Downloader):
     def __init__(self, url):
         super(URL, self).__init__()
+        if type(url) == URL:
+            url = str(url.default_url)
         url = urllib2.unquote(url)
         self.default_url = url
         self.parsed_url = urlparse.urlparse(url.__str__())
@@ -161,13 +163,16 @@ class URL(Downloader):
             return None
 
         _extension = url_request.headers.get("Content-Type", "part")
-        search = re.search('[a-zA-Z0-9].*;', _extension)
-        if not search:
-            logging.info('Error finding extension for file {file}'.format(file=self.url))
-            logging.error('Error finding extension for file {file}'.format(file=self.url))
-            return None
-        extension = '.'+search.group().split(';')[0].split('/')[-1]
-        base_name = os.path.basename(self.url).split(extension)[0] + extension
+        if ";" in _extension:
+            search = re.search('[a-zA-Z0-9].*;', _extension)
+            if not search:
+                logging.info('Error finding extension for file {file}'.format(file=self.url))
+                logging.error('Error finding extension for file {file}'.format(file=self.url))
+                return None
+            extension = '.'+search.group().split(';')[0].split('/')[-1]
+        else:
+            extension = "."+_extension.split('/')[-1]
+        base_name = os.path.splitext(os.path.basename(self.url))[0] + extension
 
         name = url_request.headers.get("Etag", base_name)
         size = url_request.headers.get("Content-Length", "0")
@@ -287,7 +292,6 @@ class Scraper(URL):
         return page_source
 
     def get_page_source(self, use_search_string=None):
-
         if self.ajax:
             if not use_search_string:
                 page_data = self._scroll_page()
@@ -333,6 +337,15 @@ class Scraper(URL):
                 self.links.append(video)
         return self.links
 
+    def scrape_links(self, soup_data, finder, getter):
+        for tag in soup_data.find_all(finder):
+            _link = tag.get(getter)
+            if _link:
+                try:
+                    _link = URL(_link)
+                except:
+                    continue
+                yield(_link)
 
     def validate_url(self, url_data):
 
@@ -347,7 +360,7 @@ class Scraper(URL):
 
         return True
 
-    def get_urls(self, soup_data, tag):
+    def get_urls(self, soup_data, tag, skip_validation=False):
         _links = []
         for line in soup_data.find_all(tag):
             for get_type in self.getters:
@@ -359,8 +372,9 @@ class Scraper(URL):
                 if not url_data.startswith('http') or url_data.startswith('/'):
                     url_data = self.domain_name + url_data[1:]
 
-                if not self.validate_url(url_data):
-                    continue
+                if not skip_validation:
+                    if not self.validate_url(url_data):
+                        continue
 
                 try:
                     url_data = URL(url_data)
@@ -377,14 +391,39 @@ class Scraper(URL):
         self.scrape_url()
         pass
 
-"""
-
-url = "http://www.ur_url.com"
-scrape = Scraper(url, ajax=True)
-data = scrape.get_page_source()
-for soup in data:
-    for link in scrape.scrape_videos(soup):
-        link.download()
 
 """
+Simple Usage:
 
+
+    url = "http://www.ur_url.com"
+    scrape = Scraper(url, ajax=True)
+    data = scrape.get_page_source()
+    for soup in data:
+        for link in scrape.scrape_videos(soup):
+            link.download()
+
+Advanced Usage:
+
+    url = "http://www.ur_url.com"
+    scrape = Scraper(url, ajax=True)
+    data = scrape.get_page_source(use_search_string="Next") # it will look for "Next" button on page and click it
+    for soup in data:
+        for link in scrape.scrape_videos(soup):
+            link.download()
+
+If you want to scrape recusrively:
+
+    url = "http://www.ur_url.com"
+    scrape = Scraper(url)
+    data = scrape.get_page_source()
+    for i in data:
+        for link in scrape.scrape_links(i, "a", "href"):
+            new_url = Scraper(link)
+            page_src = new_url.get_page_source()
+            for src in page_src:
+                for image in new_url.scrape_images(src):
+                    image.download()
+
+
+"""
