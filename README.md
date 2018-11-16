@@ -14,6 +14,15 @@ Advanced Usage:
     url = "http://www.ur_url.com"
     scrape = Scraper(url, ajax=True)
     data = scrape.get_page_source(use_search_string="Next") # it will look for "Next" button on page and click it
+
+    for soup in data:
+        for link in scrape.scrape_videos(soup):
+            link.download()
+
+    # Another usage:
+    url = "http://www.ur_url.com"
+    scrape = Scraper(url, ajax=True, browser="firefox", headless=False, sleeper=30) # This perticular combination of arguments will get a page open for you and wait for 30 seconds so you can login, Then it will start scraping.
+
     for soup in data:
         for link in scrape.scrape_videos(soup):
             link.download()

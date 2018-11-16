@@ -4,12 +4,14 @@ import os
 import re
 import time
 import gzip
+import pickle
 import shutil
 import httplib
 import urllib2
 import logging
 import StringIO
 import urlparse
+import datetime
 import requests
 import multiprocessing
 from bs4 import BeautifulSoup
@@ -21,7 +23,7 @@ options.add_argument('--headless')
 
 FORMAT = " %(module)s %(filename)s %(lineno)d %(message)s"
 # logging.basicConfig(filename='scraper.log', level=logging.INFO, format=FORMAT)
-logging.basicConfig(level=logging.INFO, format=FORMAT)
+logging.basicConfig(level=logging.ERROR, format=FORMAT)
 
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.11 (KHTML, like Gecko) Chrome/23.0.1271.64 Safari/537.11',
@@ -54,7 +56,7 @@ def class_timit(cls):
     return cls
 
 
-@class_timit
+#@class_timit
 class Downloader(object):
     def __init__(self):
         self._current_download_dir = "home/desktop/" if sys.platform not in ('win32') else "C:/temp/Downloads/"
@@ -76,9 +78,14 @@ class Downloader(object):
     def get_download_time(self):
         pass
 
-    def download(self, overwrite=False, download_path=None):
+    def download(self, overwrite=False, download_path=None, minimum_size=0):
         if not download_path:
             download_path = self.get_download_directory()
+        else:
+            self.set_download_directory(download_path)
+        if not download_path.endswith('/'):
+            download_path = download_path+"/"
+        
         url = self.url
         logging.info("Downloading %s .. at %s " % (url, download_path))
         if self.url_info is None:
@@ -86,11 +93,13 @@ class Downloader(object):
         logging.info(self.url_info)
         size = int(self.url_info['size'])
         raw_name = self.url_info['name']
+        if len(raw_name) > 260:
+            raw_name = raw_name[:50] + raw_name[-50:]
         extension = self.url_info['extension']
-        file_name = raw_name.replace('"', '') + extension
-        file_path = download_path + file_name
-
-        if size < 6000:
+        file_name = re.sub('[^\w\-_\. ]', '_', raw_name)+extension
+        file_path = (download_path + file_name).replace('\\', '/')
+    
+        if size < minimum_size:
             logging.error('Media too small to download.')
             return
 
@@ -102,6 +111,8 @@ class Downloader(object):
             self._download_static_item(file_path)
         else:
             self._download_buffer_item(file_path)
+
+        return file_path
 
     def _download_static_item(self, file_path):
         req = urllib2.Request(self.url, None, HEADERS)
@@ -121,7 +132,7 @@ class Downloader(object):
             shutil.copyfileobj(request.raw, writer)
 
 
-@class_timit
+#@class_timit
 class URL(Downloader):
     def __init__(self, url):
         super(URL, self).__init__()
@@ -174,7 +185,7 @@ class URL(Downloader):
             extension = "."+_extension.split('/')[-1]
         base_name = os.path.splitext(os.path.basename(self.url))[0] + extension
 
-        name = url_request.headers.get("Etag", base_name)
+        name = (url_request.headers.get("Etag", base_name)).split(extension)[0].replace('"', '')
         size = url_request.headers.get("Content-Length", "0")
 
         url_info = {"name": name, "extension": extension, "size": size}
@@ -233,14 +244,25 @@ class URL(Downloader):
         return url
 
 
-@class_timit
+#@class_timit
 class Scraper(URL):
-    def __init__(self, link, ajax=False, scroll_offset=1000, sleeper=3):
+    def __init__(self, link, ajax=False, browser_agent="phantomjs", headless=True, scroll_offset=1000, sleeper=3):
         super(Scraper, self).__init__(link)
+
         self.ajax = ajax
         if self.ajax:
-            # self.app = webdriver.Firefox(options=options)
-            self.app = webdriver.PhantomJS()
+            browsers = {
+                            "chrome": [webdriver.Chrome, "chromedriver"],
+                            "firefox": [webdriver.Firefox, "geckodriver"],
+                            "phantomjs": [webdriver.PhantomJS, "phantomjs"],
+                        }
+
+            browser = browsers.get(browser_agent)[0]
+            driver_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "{}.exe".format(browsers.get(browser_agent)[-1]))
+            if headless:
+                self.app = browser(executable_path=driver_path, options=options)
+            else:
+                self.app = browser(executable_path=driver_path)
             self.app.get(self.url)
         self.image_tags = ['img', 'a', 'iframe']
         self.video_tags = ['video', 'videopv', 'a', 'iframe']
@@ -292,6 +314,7 @@ class Scraper(URL):
         return page_source
 
     def get_page_source(self, use_search_string=None):
+        page_source = []
         if self.ajax:
             if not use_search_string:
                 page_data = self._scroll_page()
@@ -305,8 +328,22 @@ class Scraper(URL):
             soup = self.create_soup(data)
             if not soup:
                 continue
-            yield(soup)
-        
+            page_source.append(soup)
+        # self.pickle_data(page_source)
+        return page_source
+    
+    def pickle_data(self, data):
+        pickle_object_path = os.path.join(os.path.expanduser('~'), 'crawler_cache', 'crawler.pickle')
+        if not os.path.exists(os.path.dirname(pickle_object_path)):
+            os.makedirs(os.path.dirname(pickle_object_path))
+        with open (pickle_object_path, 'wb') as pickler:
+            pickle.dump(data, pickler)
+
+    def unpickle_data(self):
+        pickle_object_path = os.path.join(os.path.expanduser('~'), 'crawler_cache', 'crawler.pickle')
+        with open (pickle_object_path, 'rb') as pickler:
+            data = pickle.load(pickler)
+        return data
 
     @staticmethod
     def create_soup(page_source):
@@ -411,6 +448,15 @@ Advanced Usage:
     for soup in data:
         for link in scrape.scrape_videos(soup):
             link.download()
+
+ 
+    scrape = Scraper(url, ajax=True, browser_agent="chrome")
+    data = scrape.get_page_source(use_search_string="Next")
+    for soup in data:
+        for image in scrape.scrape_images(soup):
+            image.url = image.url.replace("thumbs", "resized")
+            image.download(minimum_size=20000)
+ 
 
 If you want to scrape recusrively:
 
